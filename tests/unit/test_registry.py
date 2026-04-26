@@ -1,6 +1,6 @@
 """Unit tests for runtime workflow/activity registry."""
 
-from app.runtime.registry import get_registered_definitions
+from app.runtime.registry import get_memory_consolidation_definitions, get_registered_definitions
 
 
 def test_registry_returns_expected_workflow_and_activity_sets() -> None:
@@ -12,3 +12,11 @@ def test_registry_returns_expected_workflow_and_activity_sets() -> None:
 
     assert workflow_names == {"NewsIntelligenceWorkflow", "SideLearningWorkflow"}
     assert activity_names == {"fetch_news_sources", "collect_learning_candidates"}
+
+
+def test_memory_consolidation_registry() -> None:
+    definitions = get_memory_consolidation_definitions()
+    assert {w.__name__ for w in definitions.workflows} == {"MemoryConsolidationWorkflow"}
+    assert {a.__name__ for a in definitions.activities} == {
+        "run_nightly_memory_consolidation_activity",
+    }

@@ -14,6 +14,7 @@ async def test_run_worker_builds_worker_with_registry(monkeypatch) -> None:
     fake_settings = SimpleNamespace(
         log_level="INFO",
         temporal_task_queue="platform",
+        temporal_task_queue_memory="memory-consolidation",
         temporal_server_url="localhost:7233",
         temporal_namespace="default",
     )
@@ -31,4 +32,6 @@ async def test_run_worker_builds_worker_with_registry(monkeypatch) -> None:
 
     await worker_main.run_worker()
 
-    worker_ctor.assert_called_once()
+    assert worker_ctor.call_count == 2
+    queues = {call.kwargs["task_queue"] for call in worker_ctor.call_args_list}
+    assert queues == {"platform", "memory-consolidation"}

@@ -1,5 +1,5 @@
 """Workflow and activity registration entrypoints."""
 
-from .definitions import get_registered_definitions
+from .definitions import get_memory_consolidation_definitions, get_registered_definitions
 
-__all__ = ["get_registered_definitions"]
+__all__ = ["get_memory_consolidation_definitions", "get_registered_definitions"]

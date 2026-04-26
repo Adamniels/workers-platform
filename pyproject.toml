@@ -5,6 +5,7 @@ description = "Temporal Python workers and workflow runtime for Platform."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "httpx>=0.28.0",
   "pydantic>=2.11.0",
   "pydantic-settings>=2.11.0",
   "temporalio>=1.8.0",

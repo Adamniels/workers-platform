@@ -11,7 +11,7 @@ Python Temporal worker runtime for Platform workflows.
 ## Structure
 
 - `app/runtime`: worker bootstrapping, registry, Temporal client wiring, config, logging.
-- `app/workflows`: workflow-owned execution modules (`news_intelligence`, `side_learning`).
+- `app/workflows`: workflow-owned execution modules (`news_intelligence`, `side_learning`, `memory_consolidation`).
 - `app/primitives`: generic reusable helpers with no product-domain business policy.
 - `app/memory`: memory access adapters and retrieval/proposal interfaces.
 - `app/schemas`: typed workflow input/output contracts used inside workers.
