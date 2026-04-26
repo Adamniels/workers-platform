@@ -1,0 +1,1 @@
+"""Workers platform application package."""
