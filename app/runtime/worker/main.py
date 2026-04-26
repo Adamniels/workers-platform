@@ -40,7 +40,12 @@ async def run_worker() -> None:
         settings.temporal_task_queue,
         settings.temporal_task_queue_memory,
     )
-    await asyncio.gather(platform_worker.run(), memory_worker.run())
+    try:
+        await asyncio.gather(platform_worker.run(), memory_worker.run())
+    except asyncio.CancelledError:
+        # Ctrl+C / SIGTERM path: cancel is expected; re-raise would be correct inside
+        # nested tasks, but at this top-level it only produces a noisy traceback.
+        pass
 
 
 def main() -> None:
