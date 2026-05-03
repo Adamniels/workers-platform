@@ -26,6 +26,8 @@ class WorkflowRunRequest(BaseModel):
 class WorkflowRunResult(BaseModel):
     """Typed workflow result payload for downstream artifact handling."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     workflow_type: str = Field(alias="workflowType")
     workflow_run_id: str = Field(alias="workflowRunId")
     status: Literal["completed", "failed", "needs_input"]
