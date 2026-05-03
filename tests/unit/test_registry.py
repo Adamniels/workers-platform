@@ -15,12 +15,15 @@ def test_registry_returns_expected_workflow_and_activity_sets() -> None:
         "fetch_news_sources",
         "fetch_memory_context_for_learning",
         "fetch_memory_context_for_session_generation",
+        "fetch_memory_context_for_reflection",
         "propose_learning_topics",
         "filter_known_topics",
         "post_topic_proposals",
         "generate_learning_session",
         "analyze_topic_selection_for_memory",
         "post_session_content",
+        "analyze_reflection",
+        "post_reflection_insights",
     }
 
 

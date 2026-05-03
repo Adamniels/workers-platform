@@ -1,4 +1,4 @@
-"""Activities for side-learning workflows (Stages A and B)."""
+"""Activities for side-learning workflows (Stages A, B, and C)."""
 
 from __future__ import annotations
 
@@ -30,6 +30,10 @@ from app.workflows.side_learning.session_stage_b import (
     build_topic_memory_user_prompt,
     normalize_session_sections,
     wire_memory_proposals_from_llm,
+)
+from app.workflows.side_learning.session_stage_c import (
+    build_reflection_memory_system_prompt,
+    build_reflection_memory_user_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -260,7 +264,114 @@ async def analyze_topic_selection_for_memory(
     data = response.json()
     content = data["choices"][0]["message"]["content"]
     parsed = TopicSelectionMemoryProposalsLlmResponse.model_validate(json.loads(content))
-    return wire_memory_proposals_from_llm(parsed.proposals)
+    return wire_memory_proposals_from_llm(parsed.proposals, max_proposals=3)
+
+
+@activity.defn
+async def fetch_memory_context_for_reflection(
+    topic_title: str,
+    reflection_text: str,
+) -> dict[str, Any]:
+    """Load memory context; taskDescription = topic + reflection excerpt for retrieval."""
+    settings = get_settings()
+    client = PlatformMemoryHttpClient(settings)
+    topic = (topic_title or "").strip()
+    ref = (reflection_text or "").strip()
+    excerpt = ref[:1200] if ref else ""
+    parts = [topic] if topic else []
+    if excerpt:
+        parts.append(f"User reflection (excerpt):\n{excerpt}")
+    td = "\n\n".join(parts).strip() or None
+    body = GetMemoryContextV1Request(
+        user_id=settings.consolidation_primary_user_id,
+        task_description=td,
+        workflow_type="side_learning",
+        domain="learning",
+        include_vector_recall=True,
+    )
+    ctx = await client.post_memory_context(body)
+    return ctx.model_dump(mode="json", by_alias=True)
+
+
+@activity.defn
+async def analyze_reflection(
+    context_dict: dict[str, Any],
+    topic_title: str,
+    reflection_text: str,
+    session_content_json: str,
+) -> list[dict[str, Any]]:
+    """LLM: memory proposals from reflection + session (MVP types)."""
+    settings = get_settings()
+    if not settings.openai_api_key:
+        return []
+
+    context = MemoryContextV1.model_validate(context_dict)
+    system = build_reflection_memory_system_prompt()
+    user = build_reflection_memory_user_prompt(
+        context,
+        topic_title,
+        reflection_text,
+        session_content_json,
+    )
+    url = f"{settings.openai_base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Content-Type": "application/json",
+    }
+    model = _side_learning_session_llm_model(settings)
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+    }
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(url, headers=headers, json=payload)
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        logger.exception(
+            "OpenAI reflection analysis failed status=%s body=%s",
+            response.status_code,
+            response.text[:2000],
+        )
+        raise
+    data = response.json()
+    content = data["choices"][0]["message"]["content"]
+    parsed = TopicSelectionMemoryProposalsLlmResponse.model_validate(json.loads(content))
+    # Uses session_stage_b.wire_memory_proposals_from_llm (internally try_wire_memory_proposal).
+    return wire_memory_proposals_from_llm(parsed.proposals, max_proposals=5)
+
+
+@activity.defn
+async def post_reflection_insights(
+    session_id: str,
+    memory_proposals: list[dict[str, Any]],
+) -> None:
+    """POST /api/internal/v1/side-learning/sessions/{id}/reflection-insights"""
+    settings = get_settings()
+    if not settings.platform_internal_service_token:
+        raise RuntimeError(
+            "PLATFORM_INTERNAL_SERVICE_TOKEN (or legacy MEMORY_WORKER_SERVICE_TOKEN) is not set."
+        )
+    base = settings.platform_api_base_url.rstrip("/")
+    url = f"{base}/api/internal/v1/side-learning/sessions/{session_id}/reflection-insights"
+    headers = {"Authorization": f"Bearer {settings.platform_internal_service_token}"}
+    body: dict[str, Any] = {"memoryProposals": memory_proposals or []}
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(url, json=body, headers=headers)
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        logger.exception(
+            "post_reflection_insights failed status=%s body=%s",
+            response.status_code,
+            response.text[:2000],
+        )
+        raise
 
 
 @activity.defn

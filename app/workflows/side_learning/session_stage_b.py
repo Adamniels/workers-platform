@@ -24,7 +24,7 @@ _SECTION_DEFAULTS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _append_memory_context_narrative(lines: list[str], context: MemoryContextV1) -> None:
+def append_memory_context_narrative(lines: list[str], context: MemoryContextV1) -> None:
     if context.profile_facts:
         lines.append("\n## Profile signals")
         for p in context.profile_facts[:24]:
@@ -88,7 +88,7 @@ def build_session_generation_user_prompt(
     else:
         lines.append("No extra user feedback beyond the topic title.")
 
-    _append_memory_context_narrative(lines, context)
+    append_memory_context_narrative(lines, context)
 
     lines.append(
         "\n## Output schema\n"
@@ -124,7 +124,7 @@ def build_topic_memory_user_prompt(
     ]
     if user_feedback and user_feedback.strip():
         lines.append(f"User feedback: {user_feedback.strip()}")
-    _append_memory_context_narrative(lines, context)
+    append_memory_context_narrative(lines, context)
     lines.append(
         '\n## Output schema\n'
         'Return JSON: {"proposals":[{"proposalType":"NewSemantic","title":"...","summary":"...",'
@@ -315,10 +315,14 @@ def try_wire_memory_proposal(
 
 def wire_memory_proposals_from_llm(
     items: list[TopicSelectionMemoryProposalLlmItem],
+    max_proposals: int = 3,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    cap = max(0, min(max_proposals, 8))
     for it in items[:8]:
         w = try_wire_memory_proposal(it)
         if w is not None:
             out.append(w.model_dump(mode="json", by_alias=True, exclude_none=True))
-    return out[:3]
+        if len(out) >= cap:
+            break
+    return out[:cap]

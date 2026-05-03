@@ -96,11 +96,63 @@ class SideLearningWorkflow:
             )
 
         if stage in (SideLearningStage.ANALYZE_REFLECTION.value,):
+            if not request.session_id:
+                return WorkflowRunResult(
+                    workflow_type=request.workflow_type,
+                    workflow_run_id=request.workflow_run_id,
+                    status="failed",
+                    artifact_refs=["missing_session_id"],
+                )
+            if not (request.topic_title or "").strip():
+                return WorkflowRunResult(
+                    workflow_type=request.workflow_type,
+                    workflow_run_id=request.workflow_run_id,
+                    status="failed",
+                    artifact_refs=["missing_topic_title"],
+                )
+            if not (request.reflection_text or "").strip():
+                return WorkflowRunResult(
+                    workflow_type=request.workflow_type,
+                    workflow_run_id=request.workflow_run_id,
+                    status="failed",
+                    artifact_refs=["missing_reflection_text"],
+                )
+            session_json = (request.session_content_json or "").strip()
+            if not session_json:
+                return WorkflowRunResult(
+                    workflow_type=request.workflow_type,
+                    workflow_run_id=request.workflow_run_id,
+                    status="failed",
+                    artifact_refs=["missing_session_content_json"],
+                )
+
+            ctx = await workflow.execute_activity(
+                "fetch_memory_context_for_reflection",
+                args=[request.topic_title, request.reflection_text],
+                start_to_close_timeout=timedelta(seconds=60),
+            )
+            proposals = await workflow.execute_activity(
+                "analyze_reflection",
+                args=[
+                    ctx,
+                    request.topic_title,
+                    request.reflection_text,
+                    request.session_content_json or "",
+                ],
+                start_to_close_timeout=timedelta(seconds=120),
+            )
+            await workflow.execute_activity(
+                "post_reflection_insights",
+                args=[request.session_id, proposals],
+                start_to_close_timeout=timedelta(seconds=120),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+            refs = [str(p.get("title", "")) for p in proposals if isinstance(p, dict)]
             return WorkflowRunResult(
                 workflow_type=request.workflow_type,
                 workflow_run_id=request.workflow_run_id,
-                status="failed",
-                artifact_refs=[f"stage_not_implemented:{stage}"],
+                status="completed",
+                artifact_refs=refs,
             )
 
         return WorkflowRunResult(
