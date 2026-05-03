@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,8 +19,21 @@ class Settings(BaseSettings):
     platform_api_base_url: str = Field(
         default="http://localhost:5120", alias="PLATFORM_API_BASE_URL"
     )
-    memory_worker_token: str = Field(default="", alias="MEMORY_WORKER_SERVICE_TOKEN")
+    platform_internal_service_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "PLATFORM_INTERNAL_SERVICE_TOKEN",
+            "MEMORY_WORKER_SERVICE_TOKEN",
+        ),
+        description=(
+            "Shared Bearer token for every worker calling Platform /api/internal/v1/*; "
+            "must match PlatformWorkers:ServiceToken on the API host."
+        ),
+    )
     consolidation_primary_user_id: int = Field(default=1, alias="CONSOLIDATION_PRIMARY_USER_ID")
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
+    openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -10,7 +10,12 @@ from app.workflows.memory_consolidation.activities import (
 from app.workflows.memory_consolidation.workflow import MemoryConsolidationWorkflow
 from app.workflows.news_intelligence.activities import fetch_news_sources
 from app.workflows.news_intelligence.workflow import NewsIntelligenceWorkflow
-from app.workflows.side_learning.activities import collect_learning_candidates
+from app.workflows.side_learning.activities import (
+    fetch_memory_context_for_learning,
+    filter_known_topics,
+    post_topic_proposals,
+    propose_learning_topics,
+)
 from app.workflows.side_learning.workflow import SideLearningWorkflow
 
 ActivityFn = Callable[..., Any]
@@ -28,7 +33,13 @@ def get_registered_definitions() -> WorkflowDefinitions:
     """Return all workflow and activity definitions to register in the worker."""
     return WorkflowDefinitions(
         workflows=[NewsIntelligenceWorkflow, SideLearningWorkflow],
-        activities=[fetch_news_sources, collect_learning_candidates],
+        activities=[
+            fetch_news_sources,
+            fetch_memory_context_for_learning,
+            propose_learning_topics,
+            filter_known_topics,
+            post_topic_proposals,
+        ],
     )
 
 

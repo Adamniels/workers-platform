@@ -1,0 +1,12 @@
+{
+  "profileFacts": [
+    { "source": "explicit", "text": "Enjoys distributed systems", "authorityWeight": 1.0, "rankScore": 0.9 }
+  ],
+  "activeGoals": [],
+  "relevantProjects": [],
+  "semanticMemories": [],
+  "proceduralRules": [],
+  "memoryItemVectorRecalls": [],
+  "vectorRecallUsed": false,
+  "assemblyStage": "v1-sql"
+}

@@ -14,15 +14,18 @@ logger = logging.getLogger(__name__)
 async def run_nightly_memory_consolidation_activity() -> dict:
     """POST nightly consolidation; bearer auth; deterministic work runs in .NET."""
     settings = get_settings()
-    if not settings.memory_worker_token:
-        msg = "MEMORY_WORKER_SERVICE_TOKEN is not set; cannot call internal consolidation API."
+    if not settings.platform_internal_service_token:
+        msg = (
+            "PLATFORM_INTERNAL_SERVICE_TOKEN (or legacy MEMORY_WORKER_SERVICE_TOKEN) is not set; "
+            "cannot call internal consolidation API."
+        )
         logger.error(msg)
         raise RuntimeError(msg)
 
     base = settings.platform_api_base_url.rstrip("/")
     url = f"{base}/api/internal/v1/memory/consolidation/nightly"
     body = {"userId": settings.consolidation_primary_user_id}
-    headers = {"Authorization": f"Bearer {settings.memory_worker_token}"}
+    headers = {"Authorization": f"Bearer {settings.platform_internal_service_token}"}
 
     logger.info("calling consolidation API %s userId=%s", url, body["userId"])
     async with httpx.AsyncClient(timeout=120.0) as client:

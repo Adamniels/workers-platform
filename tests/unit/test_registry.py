@@ -11,7 +11,13 @@ def test_registry_returns_expected_workflow_and_activity_sets() -> None:
     activity_names = {activity_fn.__name__ for activity_fn in definitions.activities}
 
     assert workflow_names == {"NewsIntelligenceWorkflow", "SideLearningWorkflow"}
-    assert activity_names == {"fetch_news_sources", "collect_learning_candidates"}
+    assert activity_names == {
+        "fetch_news_sources",
+        "fetch_memory_context_for_learning",
+        "propose_learning_topics",
+        "filter_known_topics",
+        "post_topic_proposals",
+    }
 
 
 def test_memory_consolidation_registry() -> None:
