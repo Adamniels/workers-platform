@@ -12,8 +12,9 @@ class NewsIntelligenceWorkflow:
     """Workflow-owned AI execution for news intelligence."""
 
     @workflow.run
-    async def run(self, request: WorkflowRunRequest) -> WorkflowRunResult:
+    async def run(self, payload: str) -> WorkflowRunResult:
         """Execute news intelligence flow with workflow-local judgment."""
+        request = WorkflowRunRequest.model_validate_json(payload)
         sources = await workflow.execute_activity(
             "fetch_news_sources",
             request.name,

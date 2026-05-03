@@ -12,8 +12,9 @@ class SideLearningWorkflow:
     """Workflow-owned AI execution for side learning."""
 
     @workflow.run
-    async def run(self, request: WorkflowRunRequest) -> WorkflowRunResult:
+    async def run(self, payload: str) -> WorkflowRunResult:
         """Execute side-learning flow with workflow-local judgment."""
+        request = WorkflowRunRequest.model_validate_json(payload)
         candidates = await workflow.execute_activity(
             "collect_learning_candidates",
             request.name,
