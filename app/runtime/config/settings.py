@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
+    openai_side_learning_session_model: str = Field(
+        default="",
+        alias="OPENAI_SIDE_LEARNING_SESSION_MODEL",
+        description=(
+            "Optional override for side-learning Stage B LLM; "
+            "falls back to OPENAI_MODEL when empty."
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

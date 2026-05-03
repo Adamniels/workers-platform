@@ -15,7 +15,7 @@ class SideLearningWorkflow:
 
     @workflow.run
     async def run(self, payload: str) -> WorkflowRunResult:
-        """Dispatch by stage; Phase 2 implements propose_topics only."""
+        """Dispatch by stage: propose_topics (A), generate_session (B), reflection (C) TBD."""
         request = WorkflowRunRequest.model_validate_json(payload)
         stage = (request.stage or "").strip()
 
@@ -57,10 +57,45 @@ class SideLearningWorkflow:
                 artifact_refs=titles,
             )
 
-        if stage in (
-            SideLearningStage.GENERATE_SESSION.value,
-            SideLearningStage.ANALYZE_REFLECTION.value,
-        ):
+        if stage in (SideLearningStage.GENERATE_SESSION.value,):
+            if not request.session_id or not (request.topic_title or "").strip():
+                return WorkflowRunResult(
+                    workflow_type=request.workflow_type,
+                    workflow_run_id=request.workflow_run_id,
+                    status="failed",
+                    artifact_refs=["missing_session_id_or_topic_title"],
+                )
+
+            ctx = await workflow.execute_activity(
+                "fetch_memory_context_for_session_generation",
+                args=[request.topic_title, request.user_feedback],
+                start_to_close_timeout=timedelta(seconds=60),
+            )
+            sections = await workflow.execute_activity(
+                "generate_learning_session",
+                args=[ctx, request.topic_title, request.user_feedback],
+                start_to_close_timeout=timedelta(seconds=300),
+            )
+            memory_proposals = await workflow.execute_activity(
+                "analyze_topic_selection_for_memory",
+                args=[ctx, request.topic_title, request.user_feedback],
+                start_to_close_timeout=timedelta(seconds=120),
+            )
+            await workflow.execute_activity(
+                "post_session_content",
+                args=[request.session_id, sections, memory_proposals],
+                start_to_close_timeout=timedelta(seconds=120),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+            refs = [str(s.get("id", "")) for s in sections if isinstance(s, dict)]
+            return WorkflowRunResult(
+                workflow_type=request.workflow_type,
+                workflow_run_id=request.workflow_run_id,
+                status="completed",
+                artifact_refs=refs,
+            )
+
+        if stage in (SideLearningStage.ANALYZE_REFLECTION.value,):
             return WorkflowRunResult(
                 workflow_type=request.workflow_type,
                 workflow_run_id=request.workflow_run_id,

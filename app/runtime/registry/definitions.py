@@ -11,8 +11,12 @@ from app.workflows.memory_consolidation.workflow import MemoryConsolidationWorkf
 from app.workflows.news_intelligence.activities import fetch_news_sources
 from app.workflows.news_intelligence.workflow import NewsIntelligenceWorkflow
 from app.workflows.side_learning.activities import (
+    analyze_topic_selection_for_memory,
     fetch_memory_context_for_learning,
+    fetch_memory_context_for_session_generation,
     filter_known_topics,
+    generate_learning_session,
+    post_session_content,
     post_topic_proposals,
     propose_learning_topics,
 )
@@ -36,9 +40,13 @@ def get_registered_definitions() -> WorkflowDefinitions:
         activities=[
             fetch_news_sources,
             fetch_memory_context_for_learning,
+            fetch_memory_context_for_session_generation,
             propose_learning_topics,
             filter_known_topics,
             post_topic_proposals,
+            generate_learning_session,
+            analyze_topic_selection_for_memory,
+            post_session_content,
         ],
     )
 

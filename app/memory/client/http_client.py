@@ -23,7 +23,8 @@ class PlatformMemoryHttpClient:
         token = self._settings.platform_internal_service_token
         if not token:
             raise RuntimeError(
-                "PLATFORM_INTERNAL_SERVICE_TOKEN (or legacy MEMORY_WORKER_SERVICE_TOKEN) is not set; "
+                "PLATFORM_INTERNAL_SERVICE_TOKEN "
+                "(or legacy MEMORY_WORKER_SERVICE_TOKEN) is not set; "
                 "must match PlatformWorkers:ServiceToken on the API.",
             )
         return {"Authorization": f"Bearer {token}"}
