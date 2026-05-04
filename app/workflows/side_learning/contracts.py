@@ -7,11 +7,26 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.workflow_contracts import WorkflowRunRequest
+
 
 class SideLearningStage(StrEnum):
     PROPOSE_TOPICS = "propose_topics"
     GENERATE_SESSION = "generate_session"
     ANALYZE_REFLECTION = "analyze_reflection"
+
+
+class SideLearningWorkflowRequest(WorkflowRunRequest):
+    """Typed request for the side learning workflow."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str | None = Field(default=None, alias="sessionId")
+    initial_prompt: str | None = Field(default=None, alias="initialPrompt")
+    topic_title: str | None = Field(default=None, alias="topicTitle")
+    user_feedback: str | None = Field(default=None, alias="userFeedback")
+    reflection_text: str | None = Field(default=None, alias="reflectionText")
+    session_content_json: str | None = Field(default=None, alias="sessionContentJson")
 
 
 class TopicProposalItem(BaseModel):

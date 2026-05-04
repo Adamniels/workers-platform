@@ -5,8 +5,8 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from app.schemas.workflow_contracts import WorkflowRunRequest, WorkflowRunResult
-from app.workflows.side_learning.contracts import SideLearningStage
+from app.schemas.workflow_contracts import WorkflowRunResult
+from app.workflows.side_learning.contracts import SideLearningStage, SideLearningWorkflowRequest
 
 
 @workflow.defn
@@ -16,7 +16,7 @@ class SideLearningWorkflow:
     @workflow.run
     async def run(self, payload: str) -> WorkflowRunResult:
         """Dispatch by stage: propose_topics (A), generate_session (B), reflection (C) TBD."""
-        request = WorkflowRunRequest.model_validate_json(payload)
+        request = SideLearningWorkflowRequest.model_validate_json(payload)
         stage = (request.stage or "").strip()
 
         if stage in (SideLearningStage.PROPOSE_TOPICS.value,):
