@@ -15,6 +15,7 @@ from app.workflows.side_learning.contracts import (
     TopicSelectionMemoryProposalsLlmResponse,
 )
 from app.workflows.side_learning.session_stage_b import (
+    build_context_section_user_prompt,
     normalize_session_sections,
     wire_memory_proposals_from_llm,
 )
@@ -87,6 +88,14 @@ def test_wire_memory_proposals_filters_invalid() -> None:
     assert len(out) == 1
     assert out[0]["proposalType"] == "NewSemantic"
     assert "key" in out[0]["proposedChangeJson"]
+
+
+def test_build_context_section_user_prompt_inserts_user_focus() -> None:
+    ctx = MemoryContextV1()
+    text = build_context_section_user_prompt(ctx, "Algebra", "more exercises")
+    lines = text.split("\n")
+    assert lines[0] == "Topic: Algebra"
+    assert lines[1] == "User focus: more exercises"
 
 
 def test_side_learning_session_llm_model_fallback() -> None:
@@ -211,6 +220,35 @@ async def test_generate_learning_session_parses_llm_json() -> None:
         out = await activities.generate_learning_session(ctx, "Topic", None)
     assert len(out) == 4
     assert out[0]["id"] == "goal"
+
+
+@pytest.mark.asyncio
+async def test_generate_context_section_returns_plain_markdown() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        assert "response_format" not in body
+        assert body.get("temperature") == 0.6
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "## Intro\n\nDeep teaching here."}}]},
+        )
+
+    transport = httpx.MockTransport(handler)
+    settings = MagicMock(spec=Settings)
+    settings.openai_api_key = "k"
+    settings.openai_base_url = "http://openai/v1"
+    settings.openai_model = "m"
+    settings.openai_side_learning_session_model = ""
+    ctx = MemoryContextV1().model_dump(mode="json", by_alias=True)
+    patch_client = patch.object(
+        activities.httpx,
+        "AsyncClient",
+        side_effect=_async_client_with_transport(transport),
+    )
+    with patch.object(activities, "get_settings", return_value=settings), patch_client:
+        out = await activities.generate_context_section(ctx, "Topic", None)
+    assert out.startswith("## Intro")
+    assert "Deep teaching" in out
 
 
 @pytest.mark.asyncio

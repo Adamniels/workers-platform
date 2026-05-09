@@ -69,9 +69,13 @@ def append_memory_context_narrative(lines: list[str], context: MemoryContextV1) 
 
 def build_session_generation_system_prompt() -> str:
     return (
-        "You design a single self-paced learning session for one user. "
-        "Return strict JSON only, no markdown. "
-        "You must output exactly four sections in order: goal, context, hands-on, reflection."
+        "You are an expert teacher writing a self-contained learning session for one student. "
+        "Your job is to actually teach the subject, not to outline it. "
+        "The context section is the core of the session — the student learns by reading it, "
+        "not by watching videos. Videos and other resources are supplementary only. "
+        "Write content in Markdown. Be specific, concrete, and substantive. "
+        "Return strict JSON only, no markdown outside of content field values. "
+        "Output exactly four sections in order: goal, context, hands-on, reflection."
     )
 
 
@@ -94,14 +98,93 @@ def build_session_generation_user_prompt(
         "\n## Output schema\n"
         'Return JSON: {"sections":[...]} with exactly 4 objects in this order of "id": '
         '"goal", "context", "hands-on", "reflection".\n'
-        "Each section object fields:\n"
-        "- id, label, estimatedMinutes (int), type (= id), content (plain text ok).\n"
-        '- goal: include "example" (string).\n'
-        '- context: include "youtubeQuery" (string) for video search.\n'
-        '- hands-on: include "outputType" e.g. code|diagram|notes|demo.\n'
-        '- reflection: include "prompts" (3–4 strings); last may fit the topic.\n'
-        "estimatedMinutes should be positive and realistic for that section."
+        "\n"
+        "### goal\n"
+        "Fields: id, label, estimatedMinutes (5–10), type, content, example.\n"
+        "content: State clearly what the user will understand and be able to do "
+        "after this session. "
+        "Explain why this topic matters and how it connects to their background. "
+        "Give 2–3 concrete real-world examples of the skill in use. "
+        "State any assumed prior knowledge. Minimum 120 words.\n"
+        'example: One specific, concrete example of the end result (a sentence or short snippet).\n'
+        "\n"
+        "### context\n"
+        "Fields: id, label, estimatedMinutes (30–45), type, content, youtubeQuery.\n"
+        "content: THIS IS THE TEACHING SECTION. Write this as a focused article or "
+        "textbook chapter. "
+        "Do not produce a list of headers with one sentence each. "
+        "Explain what the concept is and why it exists. "
+        "Build from fundamentals to practical understanding using concrete examples and analogies. "
+        "Cover 4–6 distinct ideas with full explanations, not just names. "
+        "Use Markdown — headers, code blocks, inline code, bold for emphasis. "
+        "Minimum 500 words. The youtubeQuery is a supplementary resource, "
+        "not a substitute for teaching.\n"
+        "youtubeQuery: A specific search query for a video that complements "
+        "the written content.\n"
+        "\n"
+        "### hands-on\n"
+        "Fields: id, label, estimatedMinutes (45–60), type, content, outputType.\n"
+        "content: Define a concrete task with a clear success condition. "
+        "Write out the first 2–3 steps explicitly so the user knows exactly how to start. "
+        "State what the finished result looks like. Include one stretch goal. Minimum 150 words.\n"
+        "outputType: code | diagram | notes | demo — whatever fits the task.\n"
+        "\n"
+        "### reflection\n"
+        "Fields: id, label, estimatedMinutes (10–15), type, content, prompts.\n"
+        "content: Brief framing for the reflection (2–3 sentences).\n"
+        "prompts: 3–4 questions. At least one should be specific to this topic, not generic.\n"
     )
+    return "\n".join(lines)
+
+
+def build_context_section_system_prompt() -> str:
+    return (
+        "You are a domain expert writing one focused teaching section for a student. "
+        "Write in Markdown as if writing a high-quality blog post or textbook chapter. "
+        "Do not produce headers with thin bullet points. Explain things properly. "
+        "Use examples, analogies, and progressively increasing depth. "
+        "Your output is plain Markdown text — no JSON wrapper, no preamble."
+    )
+
+
+def build_context_section_user_prompt(
+    context: MemoryContextV1,
+    topic_title: str,
+    user_feedback: str | None,
+) -> str:
+    lines = [
+        f"Topic: {topic_title.strip()}",
+        "",
+        "Write the full teaching content for this topic. Cover:",
+        "- What it is and why it exists (the problem it solves)",
+        "- How it works — the core mechanics, from simple to complex",
+        "- 2–3 concrete examples or analogies the student can follow",
+        "- Common misunderstandings or things that trip people up",
+        "- Where this fits in the bigger picture of the field",
+        "",
+        "Requirements:",
+        "- Minimum 600 words",
+        "- Use Markdown: headers (##, ###), code blocks, bold for key terms",
+        "- Write to teach, not to outline",
+        "- Do not mention YouTube or external resources",
+    ]
+
+    if user_feedback and user_feedback.strip():
+        lines.insert(1, f"User focus: {user_feedback.strip()}")
+
+    learning_semantics = [
+        s for s in context.semantic_memories if (s.domain or "").lower() == "learning"
+    ]
+    if learning_semantics:
+        lines.append("\n## What the student already knows (adjust depth accordingly)")
+        for s in learning_semantics[:12]:
+            lines.append(f"- {s.claim}")
+
+    if context.profile_facts:
+        lines.append("\n## Student background signals")
+        for p in context.profile_facts[:10]:
+            lines.append(f"- ({p.source}) {p.text}")
+
     return "\n".join(lines)
 
 

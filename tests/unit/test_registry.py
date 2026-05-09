@@ -20,6 +20,7 @@ def test_registry_returns_expected_workflow_and_activity_sets() -> None:
         "filter_known_topics",
         "post_topic_proposals",
         "generate_learning_session",
+        "generate_context_section",
         "analyze_topic_selection_for_memory",
         "post_session_content",
         "analyze_reflection",

@@ -24,6 +24,8 @@ from app.workflows.side_learning.memory_mapper import (
     filter_proposals_against_recalls,
 )
 from app.workflows.side_learning.session_stage_b import (
+    build_context_section_system_prompt,
+    build_context_section_user_prompt,
     build_session_generation_system_prompt,
     build_session_generation_user_prompt,
     build_topic_memory_system_prompt,
@@ -219,6 +221,54 @@ async def generate_learning_session(
         [s.get("id") for s in normalized],
     )
     return normalized
+
+
+@activity.defn
+async def generate_context_section(
+    context_dict: dict[str, Any],
+    topic_title: str,
+    user_feedback: str | None,
+) -> str:
+    """LLM: write the full teaching content for the context section (plain Markdown)."""
+    settings = get_settings()
+    if not settings.openai_api_key:
+        msg = "OPENAI_API_KEY is not set; cannot generate context section."
+        logger.error(msg)
+        raise RuntimeError(msg)
+
+    context = MemoryContextV1.model_validate(context_dict)
+    system = build_context_section_system_prompt()
+    user = build_context_section_user_prompt(context, topic_title, user_feedback)
+    url = f"{settings.openai_base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Content-Type": "application/json",
+    }
+    model = _side_learning_session_llm_model(settings)
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.6,
+    }
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        response = await client.post(url, headers=headers, json=payload)
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        logger.exception(
+            "OpenAI context section generation failed status=%s body=%s",
+            response.status_code,
+            response.text[:2000],
+        )
+        raise
+    data = response.json()
+    content = data["choices"][0]["message"]["content"]
+    text = (content or "").strip()
+    logger.debug("generate_context_section model=%s chars=%s", model, len(text))
+    return text
 
 
 @activity.defn

@@ -1,5 +1,6 @@
 """Workflow definition for side learning."""
 
+import asyncio
 from datetime import timedelta
 
 from temporalio import workflow
@@ -71,11 +72,21 @@ class SideLearningWorkflow:
                 args=[request.topic_title, request.user_feedback],
                 start_to_close_timeout=timedelta(seconds=60),
             )
-            sections = await workflow.execute_activity(
+            sections_task = workflow.execute_activity(
                 "generate_learning_session",
                 args=[ctx, request.topic_title, request.user_feedback],
                 start_to_close_timeout=timedelta(seconds=300),
             )
+            context_task = workflow.execute_activity(
+                "generate_context_section",
+                args=[ctx, request.topic_title, request.user_feedback],
+                start_to_close_timeout=timedelta(seconds=300),
+            )
+            sections, context_content = await asyncio.gather(sections_task, context_task)
+            for section in sections:
+                if isinstance(section, dict) and section.get("id") == "context":
+                    section["content"] = context_content
+                    break
             memory_proposals = await workflow.execute_activity(
                 "analyze_topic_selection_for_memory",
                 args=[ctx, request.topic_title, request.user_feedback],

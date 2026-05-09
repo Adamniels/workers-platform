@@ -38,8 +38,10 @@ class Settings(BaseSettings):
         default="",
         alias="OPENAI_SIDE_LEARNING_SESSION_MODEL",
         description=(
-            "Optional override for side-learning Stage B LLM; "
-            "falls back to OPENAI_MODEL when empty."
+            "Override model for side-learning Stage B "
+            "(full session JSON + context Markdown). "
+            "When empty, OPENAI_MODEL is used; set a stronger model (e.g. gpt-4o) "
+            "when OPENAI_MODEL is smaller."
         ),
     )
 
