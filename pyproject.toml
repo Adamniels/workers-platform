@@ -5,10 +5,14 @@ description = "Temporal Python workers and workflow runtime for Platform."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "beautifulsoup4>=4.12.0",
+  "feedparser>=6.0.11",
   "httpx>=0.28.0",
+  "lxml>=5.0.0",
   "pydantic>=2.11.0",
   "pydantic-settings>=2.11.0",
   "temporalio>=1.8.0",
+  "trafilatura>=2.0.0",
 ]
 
 [dependency-groups]

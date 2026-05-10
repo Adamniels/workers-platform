@@ -44,7 +44,22 @@ class Settings(BaseSettings):
             "when OPENAI_MODEL is smaller."
         ),
     )
-
+    gnews_api_key: str = Field(default="", alias="GNEWS_API_KEY")
+    news_rss_feed_urls_json: str = Field(
+        default="",
+        alias="NEWS_RSS_FEED_URLS_JSON",
+        description='JSON array of RSS feed URLs, e.g. ["https://example.com/feed.xml"]. Empty uses built-in defaults.',
+    )
+    news_gnews_topics_json: str = Field(
+        default="",
+        alias="NEWS_GNEWS_TOPICS_JSON",
+        description='JSON array of topic strings for GNews. Empty uses built-in defaults.',
+    )
+    news_arxiv_categories_json: str = Field(
+        default="",
+        alias="NEWS_ARXIV_CATEGORIES_JSON",
+        description='JSON array of arXiv category codes, e.g. ["cs.AI"]. Empty uses built-in defaults.',
+    )
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="",

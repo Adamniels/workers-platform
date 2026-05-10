@@ -12,7 +12,11 @@ def test_registry_returns_expected_workflow_and_activity_sets() -> None:
 
     assert workflow_names == {"NewsIntelligenceWorkflow", "SideLearningWorkflow"}
     assert activity_names == {
-        "fetch_news_sources",
+        "fetch_rss_articles",
+        "fetch_hacker_news_articles",
+        "fetch_gnews_articles",
+        "fetch_arxiv_articles",
+        "ingest_articles",
         "fetch_memory_context_for_learning",
         "fetch_memory_context_for_session_generation",
         "fetch_memory_context_for_reflection",

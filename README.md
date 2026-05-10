@@ -58,3 +58,5 @@ Copy `.env.example` to `.env` and adjust values:
 - `TEMPORAL_NAMESPACE` (default `default`)
 - `TEMPORAL_TASK_QUEUE` (default `platform`)
 - `LOG_LEVEL` (default `INFO`)
+
+News ingestion (Phase 1) schedule, manual trigger, and env vars: see [phase-1-operations.md](../backend-platform/docs/news/phase-1-operations.md) in `backend-platform`.

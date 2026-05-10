@@ -1,28 +1,76 @@
-"""Workflow definition for news intelligence."""
+"""News intelligence ingestion workflow."""
 
+from __future__ import annotations
+
+import json
 from datetime import timedelta
 
 from temporalio import workflow
 
 from app.schemas.workflow_contracts import WorkflowRunRequest, WorkflowRunResult
+from app.workflows.news_intelligence.contracts import NewsIngestResult
 
 
 @workflow.defn
 class NewsIntelligenceWorkflow:
-    """Workflow-owned AI execution for news intelligence."""
+    """Fetch from configured sources, dedupe by URL, ingest via Platform internal API."""
 
     @workflow.run
     async def run(self, payload: str) -> WorkflowRunResult:
-        """Execute news intelligence flow with workflow-local judgment."""
         request = WorkflowRunRequest.model_validate_json(payload)
-        sources = await workflow.execute_activity(
-            "fetch_news_sources",
-            request.name,
-            start_to_close_timeout=timedelta(seconds=30),
+
+        # Activities read their own settings; the workflow just fans out unconditionally.
+        # GNews gracefully skips itself when GNEWS_API_KEY is absent.
+        # RSS and arXiv respect their JSON env vars inside their own activities.
+        results = await workflow.asyncio.gather(
+            workflow.execute_activity(
+                "fetch_rss_articles",
+                None,
+                start_to_close_timeout=timedelta(minutes=10),
+            ),
+            workflow.execute_activity(
+                "fetch_hacker_news_articles",
+                args=[100, 30],
+                start_to_close_timeout=timedelta(seconds=30),
+            ),
+            workflow.execute_activity(
+                "fetch_gnews_articles",
+                args=[None, 5],
+                start_to_close_timeout=timedelta(seconds=60),
+            ),
+            workflow.execute_activity(
+                "fetch_arxiv_articles",
+                None,
+                start_to_close_timeout=timedelta(seconds=60),
+            ),
+            return_exceptions=True,
         )
+
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for batch in results:
+            if isinstance(batch, BaseException):
+                continue
+            for item in batch:
+                if not isinstance(item, dict):
+                    continue
+                u = (item.get("url") or "").strip().lower()
+                if not u or u in seen:
+                    continue
+                seen.add(u)
+                unique.append(item)
+
+        ingest_raw = await workflow.execute_activity(
+            "ingest_articles",
+            unique,
+            start_to_close_timeout=timedelta(seconds=120),
+        )
+        summary = NewsIngestResult.model_validate(ingest_raw)
+        artifact = json.dumps(summary.model_dump(by_alias=True, mode="json"))
+
         return WorkflowRunResult(
             workflow_type=request.workflow_type,
             workflow_run_id=request.workflow_run_id,
             status="completed",
-            artifact_refs=sources,
+            artifact_refs=[artifact],
         )

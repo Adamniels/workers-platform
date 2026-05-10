@@ -8,7 +8,13 @@ from app.workflows.memory_consolidation.activities import (
     run_nightly_memory_consolidation_activity,
 )
 from app.workflows.memory_consolidation.workflow import MemoryConsolidationWorkflow
-from app.workflows.news_intelligence.activities import fetch_news_sources
+from app.workflows.news_intelligence.activities import (
+    fetch_arxiv_articles,
+    fetch_gnews_articles,
+    fetch_hacker_news_articles,
+    fetch_rss_articles,
+    ingest_articles,
+)
 from app.workflows.news_intelligence.workflow import NewsIntelligenceWorkflow
 from app.workflows.side_learning.activities import (
     analyze_reflection,
@@ -42,7 +48,11 @@ def get_registered_definitions() -> WorkflowDefinitions:
     return WorkflowDefinitions(
         workflows=[NewsIntelligenceWorkflow, SideLearningWorkflow],
         activities=[
-            fetch_news_sources,
+            fetch_rss_articles,
+            fetch_hacker_news_articles,
+            fetch_gnews_articles,
+            fetch_arxiv_articles,
+            ingest_articles,
             fetch_memory_context_for_learning,
             fetch_memory_context_for_session_generation,
             propose_learning_topics,
