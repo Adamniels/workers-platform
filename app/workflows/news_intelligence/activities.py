@@ -41,7 +41,7 @@ _DEFAULT_ARXIV_CATEGORIES = ["cs.AI", "cs.LG"]
 
 
 _FULL_CONTENT_MIN_CHARS = 500  # below this we try trafilatura
-_RSS_MAX_AGE_DAYS = 7          # discard articles older than this
+_MAX_AGE_DAYS = 7              # discard articles older than this (all sources)
 
 
 def _strip_html(raw: str) -> str:
@@ -145,7 +145,7 @@ async def fetch_rss_articles(feed_urls: list[str] | None = None) -> list[dict]:
             return local
 
         feed_title = (getattr(parsed.feed, "title", None) or url)[:256]
-        cutoff = datetime.now(tz=UTC) - timedelta(days=_RSS_MAX_AGE_DAYS)
+        cutoff = datetime.now(tz=UTC) - timedelta(days=_MAX_AGE_DAYS)
 
         for entry in getattr(parsed, "entries", []) or []:
             title = (getattr(entry, "title", None) or "").strip()
@@ -212,7 +212,7 @@ async def fetch_hacker_news_articles(min_score: int = 100, max_results: int = 30
         logger.exception("Hacker News API request failed")
         return []
 
-    cutoff = datetime.now(tz=UTC) - timedelta(days=7)
+    cutoff = datetime.now(tz=UTC) - timedelta(days=_MAX_AGE_DAYS)
 
     for hit in data.get("hits", []) or []:
         title = (hit.get("title") or "").strip()
@@ -346,7 +346,7 @@ def _arxiv_categories() -> list[str]:
 @activity.defn
 async def fetch_arxiv_articles(categories: list[str] | None = None) -> list[dict]:
     cats = categories if categories else _arxiv_categories()
-    cutoff = datetime.now(tz=UTC) - timedelta(hours=48)
+    cutoff = datetime.now(tz=UTC) - timedelta(days=_MAX_AGE_DAYS)
     out: list[ArticleCandidate] = []
 
     for cat in cats:
