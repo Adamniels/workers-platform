@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
-import re
+import socket
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -13,7 +14,6 @@ from typing import Any
 import feedparser
 import httpx
 import trafilatura
-from bs4 import BeautifulSoup
 from temporalio import activity
 
 from app.runtime.config import get_settings
@@ -26,6 +26,7 @@ from app.workflows.news_intelligence.contracts import (
 
 logger = logging.getLogger(__name__)
 
+# TODO: Dont want to have any default, everything should be configured in the frontend.
 _DEFAULT_RSS_FEEDS = [
     "https://hnrss.org/frontpage",
     "http://feeds.arstechnica.com/arstechnica/index/",
@@ -39,41 +40,77 @@ _DEFAULT_GNEWS_TOPICS = [
 ]
 _DEFAULT_ARXIV_CATEGORIES = ["cs.AI", "cs.LG"]
 
-
-_FULL_CONTENT_MIN_CHARS = 500  # below this we try trafilatura
 _MAX_AGE_DAYS = 7              # discard articles older than this (all sources)
+_MIN_BODY_CHARS = 1000         # articles with less body text are dropped (not worth embedding)
+_MAX_ARTICLES_PER_FEED = 20    # cap entries per feed before enrichment
+_FEEDPARSER_TIMEOUT_SECS = 15  # socket timeout for feedparser.parse()
+_TRAFILATURA_TIMEOUT_SECS = 10 # per-article asyncio timeout for trafilatura fetch
+_ENRICH_CONCURRENCY = 6        # max concurrent trafilatura fetches at once
 
 
-def _strip_html(raw: str) -> str:
-    """Strip HTML tags and collapse excessive whitespace."""
-    if not raw:
-        return ""
-    text = BeautifulSoup(raw, "lxml").get_text(separator="\n")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+@dataclasses.dataclass
+class _FeedEntry:
+    """Raw metadata from any source before body enrichment."""
+    title: str
+    url: str
+    source: str
+    author: str | None
+    published_at: datetime
+    source_feed_url: str | None
 
 
-def _extract_rss_body(entry: Any) -> str:
-    """Read the richest content field available from a feedparser entry.
+def _parse_feed_metadata(url: str) -> list[_FeedEntry]:
+    """Parse a single RSS/Atom feed and return entry metadata only.
 
-    Priority:
-      1. entry.content  — feedparser's name for <content:encoded> / Atom <content>
-         (full article body; most technical blogs include this)
-      2. entry.summary / entry.description  — short excerpt, RSS <description>
-    HTML is stripped from whichever field is used.
+    Runs synchronously inside asyncio.to_thread. Sets a socket timeout so a
+    hung server cannot block the thread indefinitely. Does NOT fetch article
+    bodies — that happens in the async enrichment phase.
     """
-    content_list = getattr(entry, "content", None) or []
-    for c in content_list:
-        val = getattr(c, "value", "") or ""
-        if val.strip():
-            return _strip_html(val)
-    desc = getattr(entry, "description", None)
-    raw = (getattr(entry, "summary", None) or desc or "").strip()
-    return _strip_html(raw)
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(_FEEDPARSER_TIMEOUT_SECS)
+    try:
+        parsed = feedparser.parse(url)
+    except Exception:
+        logger.exception("RSS parse failed url=%s", url)
+        return []
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+
+    feed_title = (getattr(parsed.feed, "title", None) or url)[:256]
+    cutoff = datetime.now(tz=UTC) - timedelta(days=_MAX_AGE_DAYS)
+    entries: list[_FeedEntry] = []
+
+    for entry in (getattr(parsed, "entries", []) or [])[:_MAX_ARTICLES_PER_FEED]:
+        title = (getattr(entry, "title", None) or "").strip()
+        link = (getattr(entry, "link", None) or "").strip()
+        if not title or not link:
+            continue
+
+        pub = _parse_feed_date(entry)
+        if pub < cutoff:
+            continue
+
+        raw_author = getattr(entry, "author", None)
+        author = str(raw_author).strip() or None if raw_author else None
+
+        entries.append(_FeedEntry(
+            title=title,
+            url=link,
+            source=feed_title,
+            author=author,
+            published_at=pub,
+            source_feed_url=url,
+        ))
+
+    return entries
 
 
-def _fetch_full_article(url: str) -> str:
-    """Fetch and extract clean article text via trafilatura. Returns "" on failure."""
+def _fetch_article_body(url: str) -> str:
+    """Fetch and extract clean article text via trafilatura. Returns "" on failure.
+
+    Runs synchronously inside asyncio.to_thread. The caller wraps this with
+    asyncio.wait_for to enforce a hard timeout.
+    """
     try:
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
@@ -88,6 +125,44 @@ def _fetch_full_article(url: str) -> str:
     except Exception:
         logger.warning("trafilatura fetch failed url=%s", url)
         return ""
+
+
+async def _enrich_candidates(candidates: list[_FeedEntry]) -> list[ArticleCandidate]:
+    """Fetch full article body for each candidate via trafilatura, concurrently.
+
+    Shared by all source activities. Candidates that time out or return less
+    than _MIN_BODY_CHARS of clean text are dropped — short text is not worth
+    embedding and would pollute the ranking layer.
+    """
+    sem = asyncio.Semaphore(_ENRICH_CONCURRENCY)
+
+    async def enrich(entry: _FeedEntry) -> ArticleCandidate | None:
+        async with sem:
+            try:
+                body = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_article_body, entry.url),
+                    timeout=_TRAFILATURA_TIMEOUT_SECS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("trafilatura timeout url=%s", entry.url)
+                return None
+
+        if len(body) < _MIN_BODY_CHARS:
+            logger.debug("drop short body url=%s chars=%d", entry.url, len(body))
+            return None
+
+        return ArticleCandidate(
+            title=entry.title,
+            url=entry.url,
+            source=entry.source,
+            body=body[:500_000],
+            author=entry.author,
+            published_at=entry.published_at,
+            source_feed_url=entry.source_feed_url,
+        )
+
+    enriched = await asyncio.gather(*[enrich(c) for c in candidates])
+    return [a for a in enriched if a is not None]
 
 
 def _parse_feed_date(entry: Any) -> datetime:
@@ -134,114 +209,95 @@ def _article_json(articles: list[ArticleCandidate]) -> list[dict]:
 @activity.defn
 async def fetch_rss_articles(feed_urls: list[str] | None = None) -> list[dict]:
     urls = feed_urls if feed_urls else _rss_feed_urls()
-    out: list[ArticleCandidate] = []
 
-    def parse_one(url: str) -> list[ArticleCandidate]:
-        local: list[ArticleCandidate] = []
-        try:
-            parsed = feedparser.parse(url)
-        except Exception:
-            logger.exception("RSS parse failed url=%s", url)
-            return local
+    # Phase 1: parse all feeds concurrently — feedparser only, no per-article HTTP.
+    feed_results = await asyncio.gather(
+        *[asyncio.to_thread(_parse_feed_metadata, u) for u in urls],
+        return_exceptions=True,
+    )
 
-        feed_title = (getattr(parsed.feed, "title", None) or url)[:256]
-        cutoff = datetime.now(tz=UTC) - timedelta(days=_MAX_AGE_DAYS)
+    candidates: list[_FeedEntry] = []
+    for url, result in zip(urls, feed_results):
+        if isinstance(result, BaseException):
+            logger.error("RSS feed failed url=%s error=%s", url, result)
+            continue
+        logger.info("RSS feed parsed url=%s entries=%d", url, len(result))
+        candidates.extend(result)
 
-        for entry in getattr(parsed, "entries", []) or []:
-            title = (getattr(entry, "title", None) or "").strip()
-            link = (getattr(entry, "link", None) or "").strip()
-            if not title or not link:
-                logger.warning("RSS skip entry without title/url feed=%s", url)
-                continue
+    if not candidates:
+        logger.warning("RSS: no candidates after feed parsing")
+        return []
 
-            pub = _parse_feed_date(entry)
-            if pub < cutoff:
-                logger.debug("RSS skip old article published=%s url=%s", pub.date(), link)
-                continue
+    # Phase 2: fetch full article body for all candidates concurrently.
+    # Trafilatura is always the primary source — RSS excerpts are too short to embed.
+    out = await _enrich_candidates(candidates)
 
-            # Prefer content:encoded / Atom <content> (full body); fall back to summary
-            body = _extract_rss_body(entry)
-
-            # If the feed only ships a short excerpt, fetch the full article
-            if len(body) < _FULL_CONTENT_MIN_CHARS:
-                fetched = _fetch_full_article(link)
-                if len(fetched) > len(body):
-                    body = fetched
-                    logger.debug("trafilatura enriched url=%s chars=%d", link, len(body))
-
-            author = getattr(entry, "author", None)
-            if author:
-                author = str(author).strip() or None
-
-            local.append(
-                ArticleCandidate(
-                    title=title,
-                    url=link,
-                    source=feed_title,
-                    body=body[:500_000],
-                    author=author,
-                    published_at=pub,
-                    source_feed_url=url,
-                )
-            )
-        return local
-
-    for u in urls:
-        try:
-            batch = await asyncio.to_thread(parse_one, u)
-            out.extend(batch)
-            logger.info("RSS feed fetched url=%s articles=%d", u, len(batch))
-        except Exception:
-            logger.exception("RSS feed failed url=%s", u)
+    logger.info(
+        "RSS fetch complete candidates=%d accepted=%d dropped=%d",
+        len(candidates),
+        len(out),
+        len(candidates) - len(out),
+    )
     return _article_json(out)
 
 
 @activity.defn
-async def fetch_hacker_news_articles(min_score: int = 100, max_results: int = 30) -> list[dict]:
-    url = (
-        "https://hn.algolia.com/api/v1/search"
-        f"?tags=story&numericFilters=points%3E{min_score}&hitsPerPage={max_results}"
+async def fetch_hacker_news_articles(min_score: int = 50, max_results: int = 30) -> list[dict]:
+    # search_by_date returns recent stories sorted by date rather than all-time popularity.
+    # We also pass the cutoff timestamp directly to Algolia so it only returns stories
+    # within our age window — without this the age filter drops everything.
+    cutoff = datetime.now(tz=UTC) - timedelta(days=_MAX_AGE_DAYS)
+    cutoff_ts = int(cutoff.timestamp())
+    api_url = (
+        "https://hn.algolia.com/api/v1/search_by_date"
+        f"?tags=story"
+        f"&numericFilters=points%3E{min_score},created_at_i%3E{cutoff_ts}"
+        f"&hitsPerPage={max_results}"
     )
-    out: list[ArticleCandidate] = []
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.get(url)
+            r = await client.get(api_url)
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPError:
         logger.exception("Hacker News API request failed")
         return []
 
-    cutoff = datetime.now(tz=UTC) - timedelta(days=_MAX_AGE_DAYS)
+    candidates: list[_FeedEntry] = []
 
     for hit in data.get("hits", []) or []:
         title = (hit.get("title") or "").strip()
-        story_url = (hit.get("url") or "").strip() or None
-        if not story_url:
+        story_url = (hit.get("url") or "").strip()
+        if not title or not story_url:
             continue
         # Skip job posts — they have no editorial value as news
-        if hit.get("_tags") and "job" in hit.get("_tags", []):
+        if "job" in (hit.get("_tags") or []):
             continue
         created = hit.get("created_at")
         try:
             pub = datetime.fromisoformat(str(created).replace("Z", "+00:00")) if created else datetime.now(tz=UTC)
         except (TypeError, ValueError):
             pub = datetime.now(tz=UTC)
-        if pub < cutoff:
-            continue
-        text = (hit.get("story_text") or "").strip()
-        summary = text[:8000] if text else ""
-        out.append(
-            ArticleCandidate(
-                title=title or "Untitled",
-                url=story_url,
-                source="Hacker News",
-                body=summary[:500_000],
-                author=None,
-                published_at=pub,
-                source_feed_url=None,
-            )
-        )
+        candidates.append(_FeedEntry(
+            title=title,
+            url=story_url,
+            source="Hacker News",
+            author=None,
+            published_at=pub,
+            source_feed_url=None,
+        ))
+
+    if not candidates:
+        logger.warning("Hacker News: no candidates after filtering")
+        return []
+
+    out = await _enrich_candidates(candidates)
+    logger.info(
+        "HN fetch complete candidates=%d accepted=%d dropped=%d",
+        len(candidates),
+        len(out),
+        len(candidates) - len(out),
+    )
     return _article_json(out)
 
 
@@ -269,21 +325,17 @@ async def fetch_gnews_articles(
     if not key:
         logger.warning("GNEWS_API_KEY not set; skipping GNews")
         return []
+
     topic_list = topics if topics else _gnews_topics()
-    out: list[ArticleCandidate] = []
+    candidates: list[_FeedEntry] = []
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         for topic in topic_list:
-            url = "https://gnews.io/api/v4/search"
             try:
                 await asyncio.sleep(0.5)
                 r = await client.get(
-                    url,
-                    params={
-                        "q": topic,
-                        "max": str(max_per_topic),
-                        "token": key,
-                        "lang": "en",
-                    },
+                    "https://gnews.io/api/v4/search",
+                    params={"q": topic, "max": str(max_per_topic), "token": key, "lang": "en"},
                 )
                 if r.status_code == 429:
                     logger.warning("GNews rate limited topic=%s", topic)
@@ -299,33 +351,39 @@ async def fetch_gnews_articles(
             except httpx.HTTPError:
                 logger.exception("GNews request failed topic=%s", topic)
                 continue
+
             for art in payload.get("articles", []) or []:
                 t = (art.get("title") or "").strip()
                 u = (art.get("url") or "").strip()
                 if not t or not u:
                     continue
-                desc = (art.get("description") or "").strip()
-                src = (art.get("source") or {}) if isinstance(art.get("source"), dict) else {}
+                src = art.get("source") if isinstance(art.get("source"), dict) else {}
                 src_name = (src.get("name") or "GNews")[:256]
                 pub_raw = art.get("publishedAt")
                 try:
-                    if pub_raw:
-                        pub = datetime.fromisoformat(str(pub_raw).replace("Z", "+00:00"))
-                    else:
-                        pub = datetime.now(tz=UTC)
+                    pub = datetime.fromisoformat(str(pub_raw).replace("Z", "+00:00")) if pub_raw else datetime.now(tz=UTC)
                 except (TypeError, ValueError):
                     pub = datetime.now(tz=UTC)
-                out.append(
-                    ArticleCandidate(
-                        title=t,
-                        url=u,
-                        source=src_name,
-                        body=desc[:500_000],
-                        author=None,
-                        published_at=pub,
-                        source_feed_url=None,
-                    )
-                )
+                candidates.append(_FeedEntry(
+                    title=t,
+                    url=u,
+                    source=src_name,
+                    author=None,
+                    published_at=pub,
+                    source_feed_url=None,
+                ))
+
+    if not candidates:
+        logger.warning("GNews: no candidates after API fetch")
+        return []
+
+    out = await _enrich_candidates(candidates)
+    logger.info(
+        "GNews fetch complete candidates=%d accepted=%d dropped=%d",
+        len(candidates),
+        len(out),
+        len(candidates) - len(out),
+    )
     return _article_json(out)
 
 
@@ -354,11 +412,15 @@ async def fetch_arxiv_articles(categories: list[str] | None = None) -> list[dict
 
         def parse_arxiv(url: str) -> list[ArticleCandidate]:
             local: list[ArticleCandidate] = []
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(_FEEDPARSER_TIMEOUT_SECS)
             try:
                 parsed = feedparser.parse(url)
             except Exception:
                 logger.exception("arXiv RSS parse failed cat=%s", cat)
                 return local
+            finally:
+                socket.setdefaulttimeout(old_timeout)
             for entry in getattr(parsed, "entries", []) or []:
                 title = (getattr(entry, "title", None) or "").strip().replace("\n", " ")
                 link = (getattr(entry, "link", None) or "").strip()
