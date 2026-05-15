@@ -9,6 +9,8 @@ from app.workflows.memory_consolidation.activities import (
 )
 from app.workflows.memory_consolidation.workflow import MemoryConsolidationWorkflow
 from app.workflows.news_intelligence.activities import (
+    embed_news_articles,
+    ensure_user_news_profile,
     fetch_arxiv_articles,
     fetch_gnews_articles,
     fetch_hacker_news_articles,
@@ -53,6 +55,8 @@ def get_registered_definitions() -> WorkflowDefinitions:
             fetch_gnews_articles,
             fetch_arxiv_articles,
             ingest_articles,
+            embed_news_articles,
+            ensure_user_news_profile,
             fetch_memory_context_for_learning,
             fetch_memory_context_for_session_generation,
             propose_learning_topics,

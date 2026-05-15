@@ -66,6 +66,22 @@ class NewsIntelligenceWorkflow:
             start_to_close_timeout=timedelta(seconds=120),
         )
         summary = NewsIngestResult.model_validate(ingest_raw)
+
+        # Phase 2: embed only the articles created this run, then ensure the user
+        # interest profile exists so the feed can be ranked by cosine similarity.
+        if summary.created_ids:
+            await workflow.execute_activity(
+                "embed_news_articles",
+                summary.created_ids,
+                start_to_close_timeout=timedelta(minutes=2),
+            )
+
+        await workflow.execute_activity(
+            "ensure_user_news_profile",
+            1,  # primary user — single-user system for now
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
         artifact = json.dumps(summary.model_dump(by_alias=True, mode="json"))
 
         return WorkflowRunResult(

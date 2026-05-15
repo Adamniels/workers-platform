@@ -21,6 +21,7 @@ from app.workflows.news_intelligence.contracts import (
     ArticleCandidate,
     IngestNewsItemV1Request,
     IngestNewsItemV1Response,
+    NewsEmbedResult,
     NewsIngestResult,
 )
 
@@ -476,7 +477,7 @@ async def ingest_articles(articles: list[dict]) -> NewsIngestResult:
 
     models = [ArticleCandidate.model_validate(x) for x in articles]
 
-    async def one(client: httpx.AsyncClient, art: ArticleCandidate) -> tuple[str, ...]:
+    async def one(client: httpx.AsyncClient, art: ArticleCandidate) -> tuple[str, str | None]:
         body = IngestNewsItemV1Request(
             title=art.title,
             url=art.url,
@@ -494,18 +495,19 @@ async def ingest_articles(articles: list[dict]) -> NewsIngestResult:
                 data = IngestNewsItemV1Response.model_validate(r.json())
             except Exception:
                 logger.exception("ingest failed url=%s", art.url)
-                return ("error",)
+                return ("error", None)
         if data.status == "created":
-            return ("created",)
+            return ("created", data.id)
         if data.status == "duplicate":
-            return ("duplicate",)
-        return ("error",)
+            return ("duplicate", None)
+        return ("error", None)
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         rows = await asyncio.gather(*(one(client, a) for a in models))
-    created = sum(1 for x in rows if x == ("created",))
-    duplicates = sum(1 for x in rows if x == ("duplicate",))
-    errors = sum(1 for x in rows if x == ("error",))
+    created_ids = [row[1] for row in rows if row[0] == "created" and row[1] is not None]
+    created = len(created_ids)
+    duplicates = sum(1 for x in rows if x[0] == "duplicate")
+    errors = sum(1 for x in rows if x[0] == "error")
 
     logger.info(
         "ingest_articles done created=%s duplicates=%s errors=%s",
@@ -513,4 +515,88 @@ async def ingest_articles(articles: list[dict]) -> NewsIngestResult:
         duplicates,
         errors,
     )
-    return NewsIngestResult(created=created, duplicates=duplicates, errors=errors)
+    return NewsIngestResult(created=created, duplicates=duplicates, errors=errors, created_ids=created_ids)
+
+
+@activity.defn
+async def embed_news_articles(article_ids: list[str]) -> dict:
+    """Embed newly created articles by calling the backend embedding endpoint.
+
+    Accepts only the IDs that were *created* this run — duplicates already have
+    embeddings and are intentionally excluded. Concurrency capped at 5 so the
+    OpenAI API is not hammered from many parallel requests.
+    """
+    if not article_ids:
+        result = NewsEmbedResult()
+        logger.info("embed_news_articles skipped — no new articles")
+        return result.model_dump()
+
+    settings = get_settings()
+    base = settings.platform_api_base_url.rstrip("/")
+    token = (settings.platform_internal_service_token or "").strip()
+    headers = {"Authorization": f"Bearer {token}"}
+    sem = asyncio.Semaphore(5)
+    embedded = skipped = errors = 0
+
+    async def embed_one(client: httpx.AsyncClient, article_id: str) -> str:
+        async with sem:
+            try:
+                r = await client.post(
+                    f"{base}/api/internal/v1/news/items/{article_id}/embed",
+                    headers=headers,
+                )
+                r.raise_for_status()
+                return r.json().get("status", "error")
+            except Exception:
+                logger.exception("embed failed id=%s", article_id)
+                return "error"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        statuses = await asyncio.gather(*(embed_one(client, aid) for aid in article_ids))
+
+    for s in statuses:
+        if s == "embedded":
+            embedded += 1
+        elif s == "skipped":
+            skipped += 1
+        else:
+            errors += 1
+
+    logger.info(
+        "embed_news_articles done embedded=%s skipped=%s errors=%s",
+        embedded,
+        skipped,
+        errors,
+    )
+    result = NewsEmbedResult(embedded=embedded, skipped=skipped, errors=errors)
+    return result.model_dump()
+
+
+@activity.defn
+async def ensure_user_news_profile(user_id: int) -> dict:
+    """Seed the user's news interest profile if it does not yet exist.
+
+    Idempotent — safe to call on every workflow run. The backend checks
+    for an existing profile and returns "exists" without touching the DB
+    when one is already in place.
+    """
+    settings = get_settings()
+    base = settings.platform_api_base_url.rstrip("/")
+    token = (settings.platform_internal_service_token or "").strip()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            r = await client.post(
+                f"{base}/api/internal/v1/news/profile/seed",
+                json={"userId": user_id},
+                headers=headers,
+            )
+            r.raise_for_status()
+            status = r.json().get("status", "error")
+    except Exception:
+        logger.exception("ensure_user_news_profile failed user_id=%s", user_id)
+        status = "error"
+
+    logger.info("ensure_user_news_profile user_id=%s status=%s", user_id, status)
+    return {"status": status}

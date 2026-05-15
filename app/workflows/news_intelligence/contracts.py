@@ -28,6 +28,17 @@ class NewsIngestResult(BaseModel):
     created: int = 0
     duplicates: int = 0
     errors: int = 0
+    created_ids: list[str] = Field(default_factory=list)
+
+
+class NewsEmbedResult(BaseModel):
+    """Result from embed_news_articles activity."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    embedded: int = 0
+    skipped: int = 0
+    errors: int = 0
 
 
 class IngestNewsItemV1Request(BaseModel):
