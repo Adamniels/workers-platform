@@ -108,9 +108,12 @@ def _parse_feed_metadata(url: str) -> list[_FeedEntry]:
 def _fetch_article_body(url: str) -> str:
     """Fetch and extract clean article text via trafilatura. Returns "" on failure.
 
-    Runs synchronously inside asyncio.to_thread. The caller wraps this with
-    asyncio.wait_for to enforce a hard timeout.
+    Runs synchronously inside asyncio.to_thread. Sets a socket timeout slightly
+    under _TRAFILATURA_TIMEOUT_SECS so trafilatura's internal retries give up on
+    their own before the asyncio cancellation fires, avoiding lingering threads.
     """
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(max(3.0, _TRAFILATURA_TIMEOUT_SECS - 2))
     try:
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
@@ -125,6 +128,8 @@ def _fetch_article_body(url: str) -> str:
     except Exception:
         logger.warning("trafilatura fetch failed url=%s", url)
         return ""
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 async def _enrich_candidates(candidates: list[_FeedEntry]) -> list[ArticleCandidate]:
