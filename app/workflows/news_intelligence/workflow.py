@@ -82,6 +82,14 @@ class NewsIntelligenceWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
         )
 
+        # Phase 3: update the interest profile from recent user interactions so the
+        # feed ranking reflects dwell time, saves, and dismissals.
+        await workflow.execute_activity(
+            "update_user_news_profile",
+            1,  # primary user — single-user system for now
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
         artifact = json.dumps(summary.model_dump(by_alias=True, mode="json"))
 
         return WorkflowRunResult(

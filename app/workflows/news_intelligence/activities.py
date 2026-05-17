@@ -600,3 +600,33 @@ async def ensure_user_news_profile(user_id: int) -> dict:
 
     logger.info("ensure_user_news_profile user_id=%s status=%s", user_id, status)
     return {"status": status}
+
+
+@activity.defn
+async def update_user_news_profile(user_id: int, window_days: int = 7) -> dict:
+    """Recompute the user's news interest profile from recent interactions.
+
+    Safe to call on every workflow run even when there are no new interactions —
+    the backend returns "no-data" rather than erroring when the interaction window
+    is empty.
+    """
+    settings = get_settings()
+    base = settings.platform_api_base_url.rstrip("/")
+    token = (settings.platform_internal_service_token or "").strip()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{base}/api/internal/v1/news/profile/update-from-interactions",
+                json={"userId": user_id, "windowDays": window_days},
+                headers=headers,
+            )
+            r.raise_for_status()
+            status = r.json().get("status", "error")
+    except Exception:
+        logger.exception("update_user_news_profile failed user_id=%s", user_id)
+        status = "error"
+
+    logger.info("update_user_news_profile user_id=%s status=%s", user_id, status)
+    return {"status": status}
