@@ -44,6 +44,11 @@ class Settings(BaseSettings):
             "when OPENAI_MODEL is smaller."
         ),
     )
+    anthropic_api_key: str = Field(
+        default="",
+        alias="ANTHROPIC_API_KEY",
+        description="Anthropic API key used by the news feed LLM re-ranking activity.",
+    )
     gnews_api_key: str = Field(default="", alias="GNEWS_API_KEY")
     news_rss_feed_urls_json: str = Field(
         default="",

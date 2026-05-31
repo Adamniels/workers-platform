@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 
+import anthropic
 import feedparser
 import httpx
 import trafilatura
@@ -660,3 +661,153 @@ async def update_user_news_active_context(user_id: int) -> dict:
 
     logger.info("update_user_news_active_context user_id=%s status=%s", user_id, status)
     return {"status": status}
+
+
+# ── LLM re-ranking (Phase 5) ──────────────────────────────────────────────────
+
+_RERANK_MODEL = "claude-sonnet-4-6"
+
+
+def _build_rerank_system_prompt() -> str:
+    return (
+        "You are ranking news articles for a specific reader based on their declared interests, "
+        "goals, and active projects. "
+        "Your job is to identify which articles are genuinely most valuable to this person right now "
+        "and explain the relevance directly to them. "
+        "Be specific — reference their actual projects and goals in the explanation, "
+        "not generic interest labels. "
+        "Return strict JSON only, no markdown outside of the JSON."
+    )
+
+
+def _build_rerank_user_prompt(
+    user_ctx: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    final_limit: int,
+) -> str:
+    lines: list[str] = ["## Reader profile"]
+
+    if user_ctx.get("coreInterests"):
+        lines.append(f"Core interests: {', '.join(user_ctx['coreInterests'])}")
+    if user_ctx.get("secondaryInterests"):
+        lines.append(f"Secondary interests: {', '.join(user_ctx['secondaryInterests'])}")
+    if user_ctx.get("goals"):
+        lines.append(f"Goals: {', '.join(user_ctx['goals'])}")
+    if user_ctx.get("activeProjects"):
+        lines.append(f"Active projects: {', '.join(user_ctx['activeProjects'])}")
+
+    lines.append(f"\n## Candidate articles ({len(candidates)}, pre-ranked by vector similarity)")
+    for i, c in enumerate(candidates, start=1):
+        snippet = (c.get("bodySnippet") or "").strip()
+        lines.append(
+            f'\n[{i}] id="{c["newsItemId"]}"\n'
+            f'Title: {c["title"]}\n'
+            f'Source: {c["source"]} | Published: {c.get("publishedAt", "")}\n'
+            f'Snippet: {snippet}'
+        )
+
+    lines.append(
+        f"\n## Task\n"
+        f"Select the {final_limit} articles that are most genuinely relevant to this reader right now.\n"
+        f"Rank them from most to least relevant.\n"
+        f"For each, provide:\n"
+        f"- score: integer 0–100 (higher = more relevant)\n"
+        f"- explanation: one sentence written directly to the reader, "
+        f"referencing their specific projects or goals\n\n"
+        f'Return JSON: {{"rankings": [{{"newsItemId": "...", "score": 94, "explanation": "..."}}, ...]}}'
+    )
+    return "\n".join(lines)
+
+
+@activity.defn
+async def rank_news_feed_with_llm(
+    user_id: int,
+    candidate_limit: int = 50,
+    final_limit: int = 20,
+) -> dict:
+    """Re-rank the top candidate articles using Claude and store results with explanations.
+
+    Runs at the tail of NewsIntelligenceWorkflow after all profile updates. The result is
+    stored in the backend's news_ranked_feeds table so the feed endpoint can serve it
+    instantly with zero LLM latency. Falls back gracefully on any failure — the feed
+    continues to work from the Phase 4 vector search path.
+    """
+    settings = get_settings()
+    base    = settings.platform_api_base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {settings.platform_internal_service_token}"}
+
+    # 1. Fetch candidates + user context in one call.
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{base}/api/internal/v1/news/feed/candidates",
+                params={"userId": user_id, "limit": candidate_limit},
+                headers=headers,
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception:
+        logger.exception("rank_news_feed_with_llm: failed to fetch candidates user_id=%s", user_id)
+        return {"status": "error"}
+
+    candidates = data.get("candidates", [])
+    user_ctx   = data.get("userContext", {})
+
+    if not candidates:
+        logger.info("rank_news_feed_with_llm: no candidates, skipping user_id=%s", user_id)
+        return {"status": "no-candidates"}
+
+    if not settings.anthropic_api_key:
+        logger.warning("rank_news_feed_with_llm: ANTHROPIC_API_KEY not set, skipping")
+        return {"status": "no-api-key"}
+
+    # 2. Call Claude to re-rank.
+    system_prompt = _build_rerank_system_prompt()
+    user_prompt   = _build_rerank_user_prompt(user_ctx, candidates, final_limit)
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        message = await client.messages.create(
+            model=_RERANK_MODEL,
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw = message.content[0].text.strip()
+        # Claude sometimes wraps JSON in a markdown code fence despite being instructed
+        # not to. Strip it if present before parsing.
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        rankings = json.loads(raw)["rankings"]
+    except Exception:
+        logger.exception("rank_news_feed_with_llm: LLM call failed user_id=%s", user_id)
+        return {"status": "error"}
+
+    if not rankings:
+        logger.warning("rank_news_feed_with_llm: LLM returned empty rankings user_id=%s", user_id)
+        return {"status": "empty-rankings"}
+
+    # 3. Store ranked results in the backend.
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{base}/api/internal/v1/news/feed/ranked-results",
+                json={
+                    "userId":    user_id,
+                    "modelUsed": _RERANK_MODEL,
+                    "rankings":  rankings,
+                },
+                headers=headers,
+            )
+            r.raise_for_status()
+    except Exception:
+        logger.exception("rank_news_feed_with_llm: failed to store results user_id=%s", user_id)
+        return {"status": "error"}
+
+    logger.info(
+        "rank_news_feed_with_llm: ranked %d articles user_id=%s", len(rankings), user_id
+    )
+    return {"status": "ranked", "count": len(rankings)}

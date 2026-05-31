@@ -96,6 +96,13 @@ class NewsIntelligenceWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
         )
 
+        # Phase 5: LLM re-ranking with per-article explanations.
+        await workflow.execute_activity(
+            "rank_news_feed_with_llm",
+            1,  # primary user — single-user system for now
+            start_to_close_timeout=timedelta(seconds=120),
+        )
+
         artifact = json.dumps(summary.model_dump(by_alias=True, mode="json"))
 
         return WorkflowRunResult(
