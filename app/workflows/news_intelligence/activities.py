@@ -630,3 +630,33 @@ async def update_user_news_profile(user_id: int, window_days: int = 7) -> dict:
 
     logger.info("update_user_news_profile user_id=%s status=%s", user_id, status)
     return {"status": status}
+
+
+@activity.defn
+async def update_user_news_active_context(user_id: int) -> dict:
+    """Recompute the active context embedding from the user's declared interests and projects.
+
+    Safe to call on every workflow run — if the user has updated their profile since
+    the last run, this picks up the change immediately. Returns "no-profile" when the
+    news profile has not been seeded yet, without raising.
+    """
+    settings = get_settings()
+    base = settings.platform_api_base_url.rstrip("/")
+    token = (settings.platform_internal_service_token or "").strip()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            r = await client.post(
+                f"{base}/api/internal/v1/news/profile/update-active-context",
+                json={"userId": user_id},
+                headers=headers,
+            )
+            r.raise_for_status()
+            status = r.json().get("status", "error")
+    except Exception:
+        logger.exception("update_user_news_active_context failed user_id=%s", user_id)
+        status = "error"
+
+    logger.info("update_user_news_active_context user_id=%s status=%s", user_id, status)
+    return {"status": status}

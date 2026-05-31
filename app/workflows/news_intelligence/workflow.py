@@ -82,10 +82,16 @@ class NewsIntelligenceWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
         )
 
-        # Phase 3: update the interest profile from recent user interactions so the
-        # feed ranking reflects dwell time, saves, and dismissals.
+        # Phase 3: update the long-term and short-term behavioral profiles from recent interactions.
         await workflow.execute_activity(
             "update_user_news_profile",
+            1,  # primary user — single-user system for now
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
+        # Phase 4: refresh the active context embedding from declared interests and projects.
+        await workflow.execute_activity(
+            "update_user_news_active_context",
             1,  # primary user — single-user system for now
             start_to_close_timeout=timedelta(seconds=30),
         )

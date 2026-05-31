@@ -16,6 +16,7 @@ from app.workflows.news_intelligence.activities import (
     fetch_hacker_news_articles,
     fetch_rss_articles,
     ingest_articles,
+    update_user_news_active_context,
     update_user_news_profile,
 )
 from app.workflows.news_intelligence.workflow import NewsIntelligenceWorkflow
@@ -59,6 +60,7 @@ def get_registered_definitions() -> WorkflowDefinitions:
             embed_news_articles,
             ensure_user_news_profile,
             update_user_news_profile,
+            update_user_news_active_context,
             fetch_memory_context_for_learning,
             fetch_memory_context_for_session_generation,
             propose_learning_topics,
