@@ -76,6 +76,13 @@ class NewsIntelligenceWorkflow:
                 start_to_close_timeout=timedelta(minutes=2),
             )
 
+            # Summarisation: generate a Markdown summary for each new article via Claude Haiku.
+            await workflow.execute_activity(
+                "summarize_news_articles",
+                summary.created_ids,
+                start_to_close_timeout=timedelta(minutes=5),
+            )
+
         await workflow.execute_activity(
             "ensure_user_news_profile",
             1,  # primary user — single-user system for now

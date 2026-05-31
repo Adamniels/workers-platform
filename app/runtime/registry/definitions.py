@@ -17,6 +17,7 @@ from app.workflows.news_intelligence.activities import (
     fetch_rss_articles,
     ingest_articles,
     rank_news_feed_with_llm,
+    summarize_news_articles,
     update_user_news_active_context,
     update_user_news_profile,
 )
@@ -62,6 +63,7 @@ def get_registered_definitions() -> WorkflowDefinitions:
             ensure_user_news_profile,
             update_user_news_profile,
             update_user_news_active_context,
+            summarize_news_articles,
             rank_news_feed_with_llm,
             fetch_memory_context_for_learning,
             fetch_memory_context_for_session_generation,

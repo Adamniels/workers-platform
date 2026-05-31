@@ -663,6 +663,116 @@ async def update_user_news_active_context(user_id: int) -> dict:
     return {"status": status}
 
 
+# ── Article summarisation ─────────────────────────────────────────────────────
+
+_SUMMARY_SYSTEM_PROMPT = (
+    "You write structured Markdown summaries of articles for a software engineer.\n\n"
+    "Format your response exactly like this:\n\n"
+    "One paragraph (80–120 words) stating what the article is about, who the intended "
+    "audience is, and the core argument or finding stated plainly.\n\n"
+    "**Key points**\n\n"
+    "- **[Bold label]**: 2–3 sentences that actually explain the idea, not just name it. "
+    "Give the reader the substance, not a pointer to the substance.\n"
+    "- **[Bold label]**: Same.\n"
+    "- **[Bold label]**: Same.\n"
+    "- **[Bold label]**: Same.\n"
+    "(4–5 points depending on the article's depth)\n\n"
+    "**Bottom line**\n\n"
+    "One short paragraph (50–70 words). What should the reader take away? "
+    "Why does this matter?\n\n"
+    "Target 400–600 words total. Every key point must contain actual information, "
+    "not a description of the information. Do not add any other headers."
+)
+
+
+@activity.defn
+async def summarize_news_articles(article_ids: list[str]) -> dict:
+    """Generate and store Markdown summaries for newly ingested articles.
+
+    Called with the same created_ids list as embed_news_articles. Uses Claude Haiku
+    for speed and cost efficiency. Articles shorter than 300 chars are skipped — there
+    is nothing meaningful to summarise. Safe to re-run; existing summaries are overwritten.
+    """
+    if not article_ids:
+        logger.info("summarize_news_articles: no articles, skipping")
+        return {"status": "skipped", "summarized": 0}
+
+    settings = get_settings()
+    base    = settings.platform_api_base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {settings.platform_internal_service_token}"}
+
+    if not settings.anthropic_api_key:
+        logger.warning("summarize_news_articles: ANTHROPIC_API_KEY not set, skipping")
+        return {"status": "no-api-key", "summarized": 0}
+
+    anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    sem = asyncio.Semaphore(5)  # max 5 concurrent Haiku calls
+    summarized = 0
+    errors = 0
+
+    async def summarize_one(article_id: str) -> bool:
+        async with sem:
+            # Fetch title + raw body from backend.
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    r = await client.get(
+                        f"{base}/api/internal/v1/news/items/{article_id}/body",
+                        headers=headers,
+                    )
+                    r.raise_for_status()
+                    data     = r.json()
+                    title    = (data.get("title") or "").strip()
+                    raw_body = (data.get("body")  or "").strip()
+            except Exception:
+                logger.exception("summarize_one: fetch failed id=%s", article_id)
+                return False
+
+            if len(raw_body) < 300:
+                logger.debug("summarize_one: body too short, skipping id=%s", article_id)
+                return True  # not an error, just nothing to summarise
+
+            # Call Claude Haiku.
+            try:
+                message = await anthropic_client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=1024,
+                    system=_SUMMARY_SYSTEM_PROMPT,
+                    messages=[{
+                        "role": "user",
+                        "content": f"Title: {title}\n\n{raw_body[:8000]}",
+                    }],
+                )
+                summary = message.content[0].text.strip()
+            except Exception:
+                logger.exception("summarize_one: LLM call failed id=%s", article_id)
+                return False
+
+            # Store summary on backend.
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    r = await client.post(
+                        f"{base}/api/internal/v1/news/items/{article_id}/summary",
+                        json={"summaryMarkdown": summary},
+                        headers=headers,
+                    )
+                    r.raise_for_status()
+            except Exception:
+                logger.exception("summarize_one: store failed id=%s", article_id)
+                return False
+
+            return True
+
+    results = await asyncio.gather(*[summarize_one(aid) for aid in article_ids])
+    summarized = sum(1 for r in results if r)
+    errors = len(results) - summarized
+
+    logger.info(
+        "summarize_news_articles done summarized=%d errors=%d total=%d",
+        summarized, errors, len(article_ids),
+    )
+    return {"status": "done", "summarized": summarized, "errors": errors}
+
+
 # ── LLM re-ranking (Phase 5) ──────────────────────────────────────────────────
 
 _RERANK_MODEL = "claude-sonnet-4-6"
